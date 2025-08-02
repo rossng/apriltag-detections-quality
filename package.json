@@ -1,0 +1,19 @@
+{
+  "name": "apriltag-detections-quality",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "BlueOak-1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@monumental-works/apriltag-node": "^1.1.1",
+    "coreimage-raw-convert": "^2.0.1",
+    "dotenv": "^17.2.1",
+    "sharp": "^0.34.3"
+  }
+}
