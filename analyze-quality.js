@@ -31,11 +31,30 @@ const preserveFiles = args.includes("--preserve") || args.includes("-p");
 const printCorners = args.includes("--corners") || args.includes("-c");
 const noPlot = args.includes("--no-plot");
 
+function showHelp() {
+  console.log("AprilTag Quality Analysis");
+  console.log(
+    "Usage: node analyze-quality.js [subset_size] [raw_directory] [options]"
+  );
+  console.log("Arguments:");
+  console.log("  subset_size     Number of images to process (default: all)");
+  console.log(
+    "  raw_directory   Path to directory containing ARW files (default: from .env.local)"
+  );
+  console.log("Options:");
+  console.log("  --preserve,-p   Keep converted files and print paths");
+  console.log("  --corners,-c    Print corner positions ordered by marker ID");
+  console.log("  --no-plot       Skip generating the scatter plot");
+  console.log("  --help,-h       Show this help message");
+  console.log("Example: node analyze-quality.js 10 /path/to/raw --preserve\n");
+}
+
 if (!rawDir) {
   console.error("Error: No RAW directory specified.");
   console.error(
-    "Please provide a directory path as the second argument or set RAW_DIR in .env.local"
+    "Please provide a directory path as the second argument or set RAW_DIR in .env.local\n"
   );
+  showHelp();
   process.exit(1);
 }
 
@@ -125,21 +144,19 @@ function calculateStats(deltas) {
   return { min, mean, median, max };
 }
 
+function formatFileSize(bytes) {
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  if (bytes === 0) return '0 B';
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+}
+
 async function main() {
-  console.log("AprilTag Quality Analysis");
-  console.log(
-    "Usage: node analyze-quality.js [subset_size] [raw_directory] [options]"
-  );
-  console.log("Arguments:");
-  console.log("  subset_size     Number of images to process (default: all)");
-  console.log(
-    "  raw_directory   Path to directory containing ARW files (default: from .env.local)"
-  );
-  console.log("Options:");
-  console.log("  --preserve,-p   Keep converted files and print paths");
-  console.log("  --corners,-c    Print corner positions ordered by marker ID");
-  console.log("  --no-plot       Skip generating the scatter plot");
-  console.log("Example: node analyze-quality.js 10 /path/to/raw --preserve\n");
+  // Show help if requested
+  if (args.includes("--help") || args.includes("-h")) {
+    showHelp();
+    return;
+  }
 
   try {
     const tempDir = await createTempDir();
@@ -159,45 +176,69 @@ async function main() {
 
     const results = [];
     const scatterData = []; // For storing per-image data
-
+    let groundTruthTotalSize = 0;
+    let groundTruthFileCount = 0;
+    
+    // Initialize data structures for each quality level
+    const qualityData = {};
     for (const quality of QUALITY_VALUES) {
-      console.log(`\nProcessing quality: ${quality}`);
-      const allDeltas = [];
-      let totalMissingMarkers = 0;
+      qualityData[quality] = {
+        allDeltas: [],
+        totalMissingMarkers: 0,
+        totalJpegSize: 0
+      };
+    }
 
-      for (const arwFile of arwFiles) {
-        const arwPath = path.join(rawDir, arwFile);
-        const baseName = path.basename(arwFile, ".ARW");
+    // Process each file once
+    for (const arwFile of arwFiles) {
+      console.log(`\nProcessing file: ${arwFile}`);
+      const arwPath = path.join(rawDir, arwFile);
+      const baseName = path.basename(arwFile, ".ARW");
 
-        // Convert to PNG (ground truth)
-        const pngPath = path.join(tempDir, `${baseName}_gt.png`);
-        await convertARWToPNG(arwPath, pngPath);
-        if (preserveFiles && quality === QUALITY_VALUES[0]) {
-          console.log(`  PNG: ${pngPath}`);
+      // Convert to PNG (ground truth) - only once per file
+      const pngPath = path.join(tempDir, `${baseName}_gt.png`);
+      await convertARWToPNG(arwPath, pngPath);
+      if (preserveFiles) {
+        console.log(`  PNG: ${pngPath}`);
+      }
+      
+      // Get PNG file size
+      const pngStats = await fs.stat(pngPath);
+      groundTruthTotalSize += pngStats.size;
+      groundTruthFileCount++;
+      
+      // Detect AprilTags in ground truth - only once per file
+      const groundTruth = await detectAprilTags(pngPath);
+      console.log(
+        `  ${arwFile}: ${groundTruth.length} markers detected (ground truth)`
+      );
+
+      if (printCorners) {
+        console.log(`\n  Ground truth corners for ${arwFile}:`);
+        const sortedGT = [...groundTruth].sort((a, b) => a.id - b.id);
+        for (const tag of sortedGT) {
+          console.log(
+            `    Tag ${tag.id}: ${tag.corners
+              .map((c) => `(${c[0].toFixed(2)}, ${c[1].toFixed(2)})`)
+              .join(", ")}`
+          );
         }
-        const groundTruth = await detectAprilTags(pngPath);
-        console.log(
-          `  ${arwFile}: ${groundTruth.length} markers detected (ground truth)`
-        );
-
-        if (printCorners && quality === QUALITY_VALUES[0]) {
-          console.log(`\n  Ground truth corners for ${arwFile}:`);
-          const sortedGT = [...groundTruth].sort((a, b) => a.id - b.id);
-          for (const tag of sortedGT) {
-            console.log(
-              `    Tag ${tag.id}: ${tag.corners
-                .map((c) => `(${c[0].toFixed(2)}, ${c[1].toFixed(2)})`)
-                .join(", ")}`
-            );
-          }
-        }
-
+      }
+      
+      // Process all quality levels for this file
+      for (const quality of QUALITY_VALUES) {
         // Convert to JPEG with specific quality
         const jpegPath = path.join(tempDir, `${baseName}_q${quality}.jpg`);
         await convertARWToJPEG(arwPath, jpegPath, quality);
         if (preserveFiles) {
           console.log(`  JPEG (q=${quality}): ${jpegPath}`);
         }
+        
+        // Get JPEG file size
+        const jpegStats = await fs.stat(jpegPath);
+        qualityData[quality].totalJpegSize += jpegStats.size;
+        
+        // Detect AprilTags in JPEG
         const detection = await detectAprilTags(jpegPath);
         console.log(
           `  ${arwFile}: ${detection.length} markers detected (JPEG q=${quality})`
@@ -208,7 +249,7 @@ async function main() {
         const missingMarkers = groundTruth.filter(
           (gt) => !detectedIds.has(gt.id)
         ).length;
-        totalMissingMarkers += missingMarkers;
+        qualityData[quality].totalMissingMarkers += missingMarkers;
 
         if (printCorners) {
           console.log(`\n  JPEG (q=${quality}) corners for ${arwFile}:`);
@@ -224,8 +265,8 @@ async function main() {
 
         // Calculate deltas
         const deltas = calculateDeltas(groundTruth, detection);
-        allDeltas.push(...deltas);
-
+        qualityData[quality].allDeltas.push(...deltas);
+        
         // Store per-image data for scatter plot
         if (deltas.length > 0) {
           const imageMeanDelta =
@@ -241,25 +282,39 @@ async function main() {
           });
         }
 
-        // Clean up temporary files if not preserving
+        // Clean up JPEG file if not preserving
         if (!preserveFiles) {
-          await fs.unlink(pngPath);
           await fs.unlink(jpegPath);
         }
       }
-
-      const stats = calculateStats(allDeltas);
+      
+      // Clean up PNG file if not preserving
+      if (!preserveFiles) {
+        await fs.unlink(pngPath);
+      }
+    }
+    
+    // Generate results for each quality level
+    for (const quality of QUALITY_VALUES) {
+      const data = qualityData[quality];
+      const stats = calculateStats(data.allDeltas);
+      const avgJpegSize = data.totalJpegSize / arwFiles.length;
       results.push({
         quality,
         ...stats,
-        missingMarkers: totalMissingMarkers,
+        missingMarkers: data.totalMissingMarkers,
+        avgFileSize: avgJpegSize
       });
     }
 
+    // Calculate average ground truth file size
+    const avgGroundTruthSize = groundTruthTotalSize / groundTruthFileCount;
+    console.log(`\nGround truth PNG average file size: ${formatFileSize(avgGroundTruthSize)}`);
+    
     // Display results as table
     console.log("\n\nQuality Analysis Results:");
-    const tableHeader = "Quality | Min Delta | Mean Delta | Median Delta | Max Delta | Missing Markers";
-    const tableSeparator = "--------|-----------|------------|--------------|-----------|----------------";
+    const tableHeader = "Quality | Min Delta | Mean Delta | Median Delta | Max Delta | Missing Markers | Avg File Size";
+    const tableSeparator = "--------|-----------|------------|--------------|-----------|----------------|-------------";
     
     console.log(tableHeader);
     console.log(tableSeparator);
@@ -272,7 +327,8 @@ async function main() {
           `${result.mean.toFixed(5).padEnd(10)} | ` +
           `${result.median.toFixed(5).padEnd(12)} | ` +
           `${result.max.toFixed(5).padEnd(9)} | ` +
-          `${result.missingMarkers}`;
+          `${result.missingMarkers.toString().padEnd(14)} | ` +
+          `${formatFileSize(result.avgFileSize)}`;
       console.log(row);
       tableRows.push(row);
     }
@@ -286,7 +342,7 @@ async function main() {
     } else {
       console.log(`\nPreserved files in: ${tempDir}`);
     }
-
+    
     // Create scatter plot
     if (!noPlot && scatterData.length > 0) {
       await createScatterPlot(scatterData);
@@ -319,13 +375,6 @@ async function createScatterPlot(data) {
       size: 8,
     },
     text: data.map((d) => d.image),
-    hovertemplate:
-      "%{text}<br>Quality: %{x}<br>Mean Delta: %{y:.3f}<br>Min Delta: " +
-      data
-        .map((d) => d.minDelta.toFixed(3))
-        .map((v, i) => `${v}<br>Max Delta: ${data[i].maxDelta.toFixed(3)}`)
-        .join("") +
-      "<extra></extra>",
     customdata: data.map((d) => [d.minDelta, d.maxDelta]),
     hovertemplate:
       "%{text}<br>Quality: %{x}<br>Mean: %{y:.3f}<br>Min: %{customdata[0]:.3f}<br>Max: %{customdata[1]:.3f}<extra></extra>",
