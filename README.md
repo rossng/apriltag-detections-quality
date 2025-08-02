@@ -21,6 +21,7 @@ node analyze-quality.js [subset_size] [raw_directory] [options]
 ### Options
 - `--preserve`, `-p`: Keep converted files and print paths
 - `--corners`, `-c`: Print corner positions ordered by marker ID
+- `--no-plot`: Skip generating the scatter plot
 
 ### Examples
 
@@ -38,6 +39,12 @@ Process 5 images and preserve converted files:
 ```bash
 node analyze-quality.js 5 --preserve
 ```
+
+## Output
+
+The script generates:
+- A summary table showing quality metrics for each JPEG compression level
+- An interactive scatter plot (`quality-analysis-plot.html`) showing the relationship between JPEG quality and detection accuracy for each image
 
 ## Configuration
 
